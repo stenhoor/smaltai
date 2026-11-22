@@ -9,7 +9,8 @@ AI for the smalt apps, with a model you bring.
   logged in your browser.
 - **Later:** a model that runs in the browser on WebGPU.
 
-**Status:** designed, not built. The decisions are in smaltworks:
+**Status:** in development. The core package (router, grants, log, defences, agent loop) is in `src/`, tested against
+recorded streams, not yet against a running gateway; no app uses it yet. The decisions are in smaltworks:
 [ADR 0043](https://github.com/stenhoor/smaltworks/blob/main/adr/0043-smaltai-router-grants-and-phases.md),
 [ADR 0025](https://github.com/stenhoor/smaltworks/blob/main/adr/imported/smalt-brand/0025-smaltai-agent-gateways-and-actions.md),
 [ADR 0026](https://github.com/stenhoor/smaltworks/blob/main/adr/imported/smalt-brand/0026-smaltai-in-browser-llm.md).

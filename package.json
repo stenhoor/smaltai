@@ -2,7 +2,7 @@
   "name": "@smaltworks/smaltai",
   "version": "0.0.0",
   "private": true,
-  "description": "AI for the smalt apps, with a model you bring: a router to your own gateways, and an agent in each app.",
+  "description": "AI for the smalt apps: a router to the user's own gateways, grants, a local log and an agent loop.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -13,12 +13,26 @@
     "url": "git+https://github.com/stenhoor/smaltai.git"
   },
   "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "node node_modules/typescript7/bin/tsc -p .",
+    "test": "npm run build && node --test test/*.test.ts",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
+    "typescript": "~6.0.3",
+    "typescript7": "npm:typescript@~7.0.2",
     "vitepress": "1.6.4"
-  }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ]
 }
