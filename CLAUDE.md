@@ -33,7 +33,7 @@ in IndexedDB, smaltbi's actions, the chat panel, and the gateway recipes checked
 ## Commands
 
 ```bash
-npm install         # TypeScript 6.0.3 (emits dist/) and TypeScript 7 (typechecks)
+npm install         # prepare builds dist/ (TypeScript 6.0.3); the tests and the typecheck read it
 npm run typecheck   # TypeScript 7's tsc over src/ and test/, no emit (CI runs it)
 npm test            # build, then node --test test/*.test.ts against the built package (CI runs it)
 npm run build       # dist/: ES2022 modules and declarations
