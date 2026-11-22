@@ -21,12 +21,27 @@ smaltai's decisions are tier 1 ADRs in smaltworks:
 
 ## Status
 
-Phase 1 is designed, not built: the router and the agent in smaltbi. There is no code here yet.
+Phase 1 is in development. The core package is in `src/`: the credential guard, endpoints and the router, the
+`openai` format (chat completions, streamed), grants, the log, the defences and the agent loop. Not built yet: the log
+in IndexedDB, smaltbi's actions, the chat panel, and the gateway recipes checked against each tool.
 
 1. **Phase 1:** the router (several endpoints the user registers), grants, the log, the defences, smaltbi's actions and
    the chat panel (in smaltkit), with documented existing gateways.
 2. **Phase 2:** the in-browser engine (ADR 0026), its own package.
 3. **Phase 3:** a gateway of our own, last, if still wanted.
+
+## Commands
+
+```bash
+npm install         # prepare builds dist/ (TypeScript 6.0.3); the tests and the typecheck read it
+npm run typecheck   # TypeScript 7's tsc over src/ and test/, no emit (CI runs it)
+npm test            # build, then node --test test/*.test.ts against the built package (CI runs it)
+npm run build       # dist/: ES2022 modules and declarations
+npm run docs:dev    # the docs site (VitePress); docs:build fails on dead links (CI runs it)
+```
+
+`src/` imports with `./name.js`; tests import the package by name. Every request goes through `guardedFetch`
+(`src/credentials.ts`); `test/credentials.test.ts` fails if any other source file names a credential header.
 
 ## Rules that come first
 
