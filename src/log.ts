@@ -16,12 +16,15 @@ export interface LogEntry {
 }
 
 /**
- * Where entries go. {@link memoryLog} keeps them in memory; the log in a page is kept in smaltdb, in a database of
- * smaltai's own (DECISIONS.md, 2026-11-23), and is still to be built.
+ * Where entries go. Asynchronous, because the log in a page is kept in a database of smaltai's own, reached through
+ * smaltts (DECISIONS.md, 2026-11-23: "smaltai's storage"); that store is `@smaltworks/smaltai/store`, still to be built.
+ * {@link memoryLog} keeps entries in memory, for tests. `append` resolves once the entry is recorded: the agent waits
+ * for it before a request leaves, so the log holds everything that left the browser (ADR 0043 section 5).
  */
 export interface Log {
-  append(kind: LogKind, data: unknown): LogEntry;
-  entries(): readonly LogEntry[];
+  /** Records an entry. Entries are numbered in the order `append` is called. */
+  append(kind: LogKind, data: unknown): Promise<LogEntry>;
+  entries(): Promise<readonly LogEntry[]>;
   /** Calls `listener` for each new entry; returns a function that stops it. */
   subscribe(listener: (entry: LogEntry) => void): () => void;
 }
@@ -32,14 +35,14 @@ export function memoryLog(options: { now?: () => Date } = {}): Log {
   const list: LogEntry[] = [];
   const listeners = new Set<(entry: LogEntry) => void>();
   return {
-    append(kind, data) {
+    async append(kind, data) {
       // A copy, so later changes to the caller's objects don't change what was logged.
       const entry: LogEntry = { seq: list.length + 1, time: now().toISOString(), kind, data: copy(data) };
       list.push(entry);
       for (const listener of listeners) listener(entry);
       return entry;
     },
-    entries: () => list,
+    entries: async () => [...list],
     subscribe(listener) {
       listeners.add(listener);
       return () => void listeners.delete(listener);

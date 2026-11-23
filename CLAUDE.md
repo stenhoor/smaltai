@@ -22,10 +22,12 @@ smaltai's decisions are tier 1 ADRs in smaltworks:
 ## Status
 
 Phase 1 is in development. The core package is in `src/`: the credential guard, endpoints and the router, the
-`openai` format (chat completions, streamed), grants, the log, the defences and the agent loop. Not built yet: the log,
-grants and endpoints kept in smaltdb, smaltbi's actions, the chat panel, and the gateway recipes checked against each
-tool. The owner's decisions of 2026-11-23 (smaltworks DECISIONS.md, "smaltai: storage, what grants limit, and the core
-package's choices") settle the storage, what grants protect, the error codes and the defaults.
+`openai` format (chat completions, streamed), grants, the log, the defences and the agent loop. The log, the grant store
+and the router are asynchronous, ready for a database behind them. Not built yet: the log, grants and endpoints kept in
+smaltai's own database through smaltts (`@smaltworks/smaltai/store`, stenhoor/smaltai#5), smaltbi's actions, the chat
+panel, and the gateway recipes checked against each tool. The owner's decisions of 2026-11-23 are in smaltworks
+DECISIONS.md: "smaltai: storage, what grants limit, and the core package's choices", "smaltai reaches the database
+through smaltts" and "smaltai's storage: the entry point, the interfaces and smaltts's build".
 
 1. **Phase 1:** the router (several endpoints the user registers), grants, the log, the defences, smaltbi's actions and
    the chat panel (in smaltkit), with documented existing gateways.

@@ -6,7 +6,7 @@ import { endpoint, type Endpoint } from './endpoint.js';
 import { SmaltaiError } from './errors.js';
 import type { Log } from './log.js';
 import { openaiGateway } from './openai.js';
-import { memoryStore, readJson, type KeyValueStore } from './store.js';
+import { memoryStore, readJson, serial, type KeyValueStore } from './store.js';
 import type { Fetch, Gateway } from './types.js';
 
 /** The endpoint and model a chat uses. */
@@ -27,16 +27,16 @@ export interface RouterOptions {
   prefix?: string;
 }
 
-/** The router. */
+/** The router. Asynchronous, as its store is (DECISIONS.md, 2026-11-23: "smaltai's storage"). */
 export interface Router {
-  endpoints(): Endpoint[];
+  endpoints(): Promise<Endpoint[]>;
   /** Adds or replaces an endpoint, checked by {@link endpoint}. */
-  save(input: unknown): Endpoint;
-  remove(id: string): void;
-  gateway(id: string): Gateway;
+  save(input: unknown): Promise<Endpoint>;
+  remove(id: string): Promise<void>;
+  gateway(id: string): Promise<Gateway>;
   /** The choice remembered for a scope (an app, a report), if any. */
-  choice(scope: string): Choice | null;
-  choose(scope: string, choice: Choice): void;
+  choice(scope: string): Promise<Choice | null>;
+  choose(scope: string, choice: Choice): Promise<void>;
 }
 
 export function createRouter(options: RouterOptions = {}): Router {
@@ -44,42 +44,47 @@ export function createRouter(options: RouterOptions = {}): Router {
   const prefix = options.prefix ?? 'smaltai';
   const endpointsKey = `${prefix}.endpoints`;
   const choiceKey = (scope: string) => `${prefix}.choice.${scope}`;
+  const oneAtATime = serial();
 
   // Endpoints read back from storage are checked again: an entry with a key field is refused, not used.
-  function load(): Endpoint[] {
-    const raw = readJson(store, endpointsKey);
+  async function load(): Promise<Endpoint[]> {
+    const raw = await readJson(store, endpointsKey);
     if (!Array.isArray(raw)) return [];
     const list: Endpoint[] = [];
     for (const item of raw) {
       try {
         list.push(endpoint(item));
       } catch (error) {
-        options.log?.append('error', { what: 'stored endpoint refused', error });
+        await options.log?.append('error', { what: 'stored endpoint refused', error });
       }
     }
     return list;
   }
 
-  function write(list: Endpoint[]): void {
-    store.setItem(endpointsKey, JSON.stringify(list));
+  async function write(list: Endpoint[]): Promise<void> {
+    await store.setItem(endpointsKey, JSON.stringify(list));
   }
 
   return {
-    endpoints: load,
-    save(input) {
+    endpoints: () => oneAtATime(load),
+    async save(input) {
       const checked = endpoint(input);
-      const list = load().filter((e) => e.id !== checked.id);
-      list.push(checked);
-      write(list);
-      options.log?.append('grant', { change: 'endpoint saved', endpoint: checked });
-      return checked;
+      return oneAtATime(async () => {
+        const list = (await load()).filter((e) => e.id !== checked.id);
+        list.push(checked);
+        await write(list);
+        await options.log?.append('grant', { change: 'endpoint saved', endpoint: checked });
+        return checked;
+      });
     },
     remove(id) {
-      write(load().filter((e) => e.id !== id));
-      options.log?.append('grant', { change: 'endpoint removed', endpointId: id });
+      return oneAtATime(async () => {
+        await write((await load()).filter((e) => e.id !== id));
+        await options.log?.append('grant', { change: 'endpoint removed', endpointId: id });
+      });
     },
-    gateway(id) {
-      const found = load().find((e) => e.id === id);
+    async gateway(id) {
+      const found = (await oneAtATime(load)).find((e) => e.id === id);
       if (found === undefined) throw new SmaltaiError('SMALTAI_ENDPOINT_INVALID', `No endpoint "${id}".`);
       const fetchOption = options.fetch === undefined ? {} : { fetch: options.fetch };
       switch (found.format) {
@@ -87,13 +92,13 @@ export function createRouter(options: RouterOptions = {}): Router {
           return openaiGateway(found, fetchOption);
       }
     },
-    choice(scope) {
-      const raw = readJson(store, choiceKey(scope)) as Partial<Choice> | null;
+    async choice(scope) {
+      const raw = (await readJson(store, choiceKey(scope))) as Partial<Choice> | null;
       if (raw === null || typeof raw.endpointId !== 'string' || typeof raw.model !== 'string') return null;
       return { endpointId: raw.endpointId, model: raw.model };
     },
-    choose(scope, choice) {
-      store.setItem(choiceKey(scope), JSON.stringify({ endpointId: choice.endpointId, model: choice.model }));
+    async choose(scope, choice) {
+      await store.setItem(choiceKey(scope), JSON.stringify({ endpointId: choice.endpointId, model: choice.model }));
     },
   };
 }

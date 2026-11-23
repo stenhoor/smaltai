@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkActions, defaultGrants, SmaltaiError, grants, memoryLog, runAgent, type Action, type ApprovalRequest, type Grants } from '@smaltworks/smaltai';
+import { checkActions, createGrantStore, defaultGrants, SmaltaiError, type Log, grants, memoryLog, runAgent, type Action, type ApprovalRequest, type Grants } from '@smaltworks/smaltai';
 import { scriptedGateway } from './helpers.ts';
 
 function actions(ran: string[]): Action[] {
@@ -60,7 +60,7 @@ test('runs granted actions without asking, and returns results as data', async (
   ]);
   const log = memoryLog();
   const result = await runAgent(
-    { gateway, model: 'm', actions: actions(ran), grants: defaultGrants, approve: async (r) => (asked.push(r), 'once'), log, system: 'You help with reports.' },
+    { gateway, model: 'm', actions: actions(ran), grants: async () => defaultGrants(), approve: async (r) => (asked.push(r), 'once'), log, system: 'You help with reports.' },
     [{ role: 'user', content: 'What tables are there?' }],
   );
   assert.equal(result.outcome, 'done');
@@ -73,7 +73,7 @@ test('runs granted actions without asking, and returns results as data', async (
   assert.match(result.messages[0]!.content, /You help with reports\.[\s\S]*untrusted-data/);
   assert.deepEqual(gateway.requests[0]!.tools!.map((t) => t.name), ['list_tables', 'run_query', 'change_data']);
   assert.deepEqual(Object.keys(gateway.requests[0]!.tools![0]!), ['name', 'description', 'inputSchema']);
-  assert.deepEqual(log.entries().map((e) => e.kind), ['request', 'action', 'result', 'response', 'request', 'response']);
+  assert.deepEqual((await log.entries()).map((e) => e.kind), ['request', 'action', 'result', 'response', 'request', 'response']);
 });
 
 test('asks outside the grants, and a refusal is told to the model', async () => {
@@ -85,14 +85,14 @@ test('asks outside the grants, and a refusal is told to the model', async () => 
   ]);
   const log = memoryLog();
   const result = await runAgent(
-    { gateway, model: 'm', actions: actions(ran), grants: defaultGrants, approve: async (r) => (asked.push(r), r.action === 'run_query' ? 'once' : 'decline'), log },
+    { gateway, model: 'm', actions: actions(ran), grants: async () => defaultGrants(), approve: async (r) => (asked.push(r), r.action === 'run_query' ? 'once' : 'decline'), log },
     [{ role: 'user', content: 'go' }],
   );
   assert.deepEqual(asked.map((a) => a.action), ['run_query', 'change_data']);
   assert.deepEqual(ran, ['run_query select 1']);
   assert.match(result.messages.find((m) => m.toolCallId === 'c2')!.content, /declined/);
   assert.deepEqual(
-    log.entries().filter((e) => e.kind === 'approval').map((e) => (e.data as { answer: string }).answer),
+    (await log.entries()).filter((e) => e.kind === 'approval').map((e) => (e.data as { answer: string }).answer),
     ['once', 'decline'],
   );
 });
@@ -112,7 +112,7 @@ test('grants are read at every call, so a revoke takes effect at once', async ()
     return 1;
   };
   let asks = 0;
-  await runAgent({ gateway, model: 'm', actions: acts, grants: () => current, approve: async () => (asks++, 'decline'), log: memoryLog() }, []);
+  await runAgent({ gateway, model: 'm', actions: acts, grants: async () => current, approve: async () => (asks++, 'decline'), log: memoryLog() }, []);
   assert.deepEqual(ran, ['a']);
   assert.equal(asks, 1);
 });
@@ -123,7 +123,7 @@ test('unknown actions and bad arguments are answered, not run', async () => {
     [call('c1', 'drop_everything'), call('c2', 'run_query', '{bad'), { type: 'done', reason: 'tool_calls' }],
     [{ type: 'done', reason: 'stop' }],
   ]);
-  const result = await runAgent({ gateway, model: 'm', actions: actions(ran), grants: () => grants({ data: { level: 'full' } }), approve: async () => 'once', log: memoryLog() }, []);
+  const result = await runAgent({ gateway, model: 'm', actions: actions(ran), grants: async () => grants({ data: { level: 'full' } }), approve: async () => 'once', log: memoryLog() }, []);
   assert.deepEqual(ran, []);
   assert.match(result.messages.find((m) => m.toolCallId === 'c1')!.content, /no action "drop_everything"/);
   assert.match(result.messages.find((m) => m.toolCallId === 'c2')!.content, /JSON object/);
@@ -136,9 +136,9 @@ test('an action that fails is told to the model as data', async () => {
   };
   const gateway = scriptedGateway([[call('c1', 'list_tables'), { type: 'done', reason: 'tool_calls' }], [{ type: 'done', reason: 'stop' }]]);
   const log = memoryLog();
-  const result = await runAgent({ gateway, model: 'm', actions: acts, grants: defaultGrants, approve: async () => 'once', log }, []);
+  const result = await runAgent({ gateway, model: 'm', actions: acts, grants: async () => defaultGrants(), approve: async () => 'once', log }, []);
   assert.match(result.messages.find((m) => m.toolCallId === 'c1')!.content, /table locked/);
-  assert.equal((log.entries().find((e) => e.kind === 'result')!.data as { ok: boolean }).ok, false);
+  assert.equal(((await log.entries()).find((e) => e.kind === 'result')!.data as { ok: boolean }).ok, false);
 });
 
 test('the kill switch stops the agent and cancels the actions not yet run', async () => {
@@ -152,12 +152,12 @@ test('the kill switch stops the agent and cancels the actions not yet run', asyn
   };
   const gateway = scriptedGateway([[call('c1', 'list_tables'), call('c2', 'list_tables'), { type: 'done', reason: 'tool_calls' }], [{ type: 'done', reason: 'stop' }]]);
   const log = memoryLog();
-  const result = await runAgent({ gateway, model: 'm', actions: acts, grants: defaultGrants, approve: async () => 'once', log }, [], controller.signal);
+  const result = await runAgent({ gateway, model: 'm', actions: acts, grants: async () => defaultGrants(), approve: async () => 'once', log }, [], controller.signal);
   assert.equal(result.outcome, 'stopped');
   assert.deepEqual(ran, ['list_tables']);
   assert.match(result.messages.find((m) => m.toolCallId === 'c2')!.content, /Cancelled/);
   assert.equal(gateway.requests.length, 1);
-  assert.equal(log.entries().at(-1)!.kind, 'stop');
+  assert.equal((await log.entries()).at(-1)!.kind, 'stop');
 });
 
 test('stopping mid-stream keeps what arrived in the log', async () => {
@@ -165,18 +165,18 @@ test('stopping mid-stream keeps what arrived in the log', async () => {
   const gateway = scriptedGateway([[{ type: 'text', text: 'Hal' }, { type: 'text', text: 'f' }, { type: 'done', reason: 'stop' }]]);
   const log = memoryLog();
   const result = await runAgent(
-    { gateway, model: 'm', actions: [], grants: defaultGrants, approve: async () => 'once', log, onEvent: (e) => e.type === 'text' && controller.abort() },
+    { gateway, model: 'm', actions: [], grants: async () => defaultGrants(), approve: async () => 'once', log, onEvent: (e) => e.type === 'text' && controller.abort() },
     [],
     controller.signal,
   );
   assert.equal(result.outcome, 'stopped');
-  assert.deepEqual(log.entries().find((e) => e.kind === 'response')!.data, { text: 'Hal', toolCalls: [], partial: true });
+  assert.deepEqual((await log.entries()).find((e) => e.kind === 'response')!.data, { text: 'Hal', toolCalls: [], partial: true });
 });
 
 test('the step limit ends a run that never stops calling actions', async () => {
   const turn = () => [call('c', 'list_tables'), { type: 'done' as const, reason: 'tool_calls' }];
   const gateway = scriptedGateway([turn(), turn(), turn()]);
-  const result = await runAgent({ gateway, model: 'm', actions: actions([]), grants: defaultGrants, approve: async () => 'once', log: memoryLog(), maxSteps: 3 }, []);
+  const result = await runAgent({ gateway, model: 'm', actions: actions([]), grants: async () => defaultGrants(), approve: async () => 'once', log: memoryLog(), maxSteps: 3 }, []);
   assert.equal(result.outcome, 'limit');
   assert.equal(gateway.requests.length, 3);
 });
@@ -190,13 +190,13 @@ test('"grant" reaches the app, and only where the question offered it', async ()
   const asked: ApprovalRequest[] = [];
   const log = memoryLog();
   await runAgent(
-    { gateway, model: 'm', actions: actions([]), grants: defaultGrants, approve: async (r) => (asked.push(r), 'grant'), onGrant: (a) => granted.push(a), log },
+    { gateway, model: 'm', actions: actions([]), grants: async () => defaultGrants(), approve: async (r) => (asked.push(r), 'grant'), onGrant: async (a) => void granted.push(a), log },
     [],
   );
   // change_data isn't granted: grantable. run_query is above the schema level: changed in the grants panel, not here.
   assert.deepEqual(asked.map((a) => [a.action, a.grantable, a.undoable]), [['change_data', true, false], ['run_query', false, true]]);
   assert.deepEqual(granted, ['change_data']);
-  assert.deepEqual(log.entries().filter((e) => e.kind === 'approval').map((e) => (e.data as { answer: string }).answer), ['grant', 'once']);
+  assert.deepEqual((await log.entries()).filter((e) => e.kind === 'approval').map((e) => (e.data as { answer: string }).answer), ['grant', 'once']);
 });
 
 test('an action starts while the answer is still streaming', async () => {
@@ -223,18 +223,18 @@ test('an action starts while the answer is still streaming', async () => {
       return [];
     },
   };
-  await runAgent({ gateway, model: 'm', actions: acts, grants: defaultGrants, approve: async () => 'once', log: memoryLog() }, []);
+  await runAgent({ gateway, model: 'm', actions: acts, grants: async () => defaultGrants(), approve: async () => 'once', log: memoryLog() }, []);
   assert.deepEqual(order, ['action ran', 'stream went on']);
 });
 
 test("smaltai's own time is measured and logged", async () => {
   const gateway = scriptedGateway([[call('c1', 'list_tables'), { type: 'done', reason: 'tool_calls' }], [{ type: 'done', reason: 'stop' }]]);
   const log = memoryLog();
-  const result = await runAgent({ gateway, model: 'm', actions: actions([]), grants: defaultGrants, approve: async () => 'once', log }, []);
+  const result = await runAgent({ gateway, model: 'm', actions: actions([]), grants: async () => defaultGrants(), approve: async () => 'once', log }, []);
   assert.equal(result.timings.buildMs.length, 2);
   assert.equal(result.timings.actionMs.length, 1);
-  assert.equal(typeof (log.entries().find((e) => e.kind === 'request')!.data as { buildMs: number }).buildMs, 'number');
-  assert.equal(typeof (log.entries().find((e) => e.kind === 'result')!.data as { ms: number }).ms, 'number');
+  assert.equal(typeof ((await log.entries()).find((e) => e.kind === 'request')!.data as { buildMs: number }).buildMs, 'number');
+  assert.equal(typeof ((await log.entries()).find((e) => e.kind === 'result')!.data as { ms: number }).ms, 'number');
 });
 
 test('every action has a description, schemas, a kind, what it touches and whether it undoes', () => {
@@ -248,4 +248,71 @@ test('every action has a description, schemas, a kind, what it touches and wheth
   assert.throws(() => checkActions([{ ...ok[0]!, touches: undefined as never }]), invalid);
   assert.throws(() => checkActions([{ ...ok[0]!, undoable: undefined as never }]), invalid);
   assert.throws(() => checkActions([ok[0]!, ok[0]!]), invalid);
+});
+
+test('each request is recorded in the log before it is sent', async () => {
+  const order: string[] = [];
+  const inner = memoryLog();
+  const log: Log = {
+    async append(kind, data) {
+      await new Promise((r) => setTimeout(r, 0));
+      const entry = await inner.append(kind, data);
+      order.push(`logged ${kind}`);
+      return entry;
+    },
+    entries: () => inner.entries(),
+    subscribe: (l) => inner.subscribe(l),
+  };
+  const gateway = scriptedGateway([[{ type: 'text', text: 'hi' }, { type: 'done', reason: 'stop' }]]);
+  const chat = gateway.chat.bind(gateway);
+  gateway.chat = (request) => {
+    order.push('sent');
+    return chat(request);
+  };
+  await runAgent({ gateway, model: 'm', actions: [], grants: async () => defaultGrants(), approve: async () => 'once', log }, []);
+  assert.deepEqual(order, ['logged request', 'sent', 'logged response']);
+});
+
+test('a request the log cannot record is not sent', async () => {
+  const gateway = scriptedGateway([[{ type: 'done', reason: 'stop' }]]);
+  const log: Log = {
+    append: async () => {
+      throw new Error('disk full');
+    },
+    entries: async () => [],
+    subscribe: () => () => {},
+  };
+  await assert.rejects(
+    runAgent({ gateway, model: 'm', actions: [], grants: async () => defaultGrants(), approve: async () => 'once', log }, []),
+    /disk full/,
+  );
+  assert.equal(gateway.requests.length, 0);
+});
+
+test('a grant given from a question is read on the next call', async () => {
+  const store = createGrantStore();
+  const gateway = scriptedGateway([
+    [call('c1', 'change_data'), { type: 'done', reason: 'tool_calls' }],
+    [call('c2', 'change_data'), { type: 'done', reason: 'tool_calls' }],
+    [{ type: 'done', reason: 'stop' }],
+  ]);
+  const ran: string[] = [];
+  let asks = 0;
+  await runAgent(
+    {
+      gateway,
+      model: 'm',
+      actions: actions(ran),
+      grants: () => store.get('ollama', 'sales.db'),
+      approve: async () => (asks++, 'grant'),
+      onGrant: async (name) => {
+        const current = await store.get('ollama', 'sales.db');
+        await store.set('ollama', 'sales.db', { ...current, actions: { ...current.actions, [name]: true } });
+      },
+      log: memoryLog(),
+    },
+    [],
+  );
+  assert.equal(asks, 1);
+  assert.deepEqual(ran, ['change_data', 'change_data']);
 });
