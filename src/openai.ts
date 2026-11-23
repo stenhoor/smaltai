@@ -77,16 +77,16 @@ export function openaiGateway(endpoint: Endpoint, options: OpenAIGatewayOptions 
       response = await send(`${base}${path}`, { ...init, signal });
     } catch (error) {
       if (error instanceof SmaltaiError) throw error;
-      if (isAbort(error, signal)) throw new SmaltaiError('ABORTED', 'Stopped.', { cause: error });
+      if (isAbort(error, signal)) throw new SmaltaiError('SMALTAI_ABORTED', 'Stopped.', { cause: error });
       throw new SmaltaiError(
-        'GATEWAY_UNREACHABLE',
+        'SMALTAI_GATEWAY_UNREACHABLE',
         `Can't reach ${endpoint.name} at ${base}. Is it running, and does it allow this page's origin?`,
         { cause: error },
       );
     }
     if (!response.ok) {
       const text = (await response.text().catch(() => '')).slice(0, 500);
-      throw new SmaltaiError('GATEWAY_ERROR', `${endpoint.name} answered ${response.status}${text === '' ? '' : `: ${text}`}`, {
+      throw new SmaltaiError('SMALTAI_GATEWAY_ERROR', `${endpoint.name} answered ${response.status}${text === '' ? '' : `: ${text}`}`, {
         status: response.status,
       });
     }
@@ -100,15 +100,16 @@ export function openaiGateway(endpoint: Endpoint, options: OpenAIGatewayOptions 
       { method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(openaiBody(chatRequest)) },
       signal,
     );
-    if (response.body === null) throw new SmaltaiError('STREAM_INVALID', `${endpoint.name} sent no body.`);
+    if (response.body === null) throw new SmaltaiError('SMALTAI_STREAM_INVALID', `${endpoint.name} sent no body.`);
 
     const calls = new Map<number, PendingCall>();
     let reason = 'stop';
-    let flushed = false;
-    const flush = function* (): Generator<StreamEvent> {
-      if (flushed) return;
-      flushed = true;
+    const sent = new Set<number>();
+    // Yields the calls before `below` (all of them by default) not yet yielded, in order.
+    const flush = function* (below = Infinity): Generator<StreamEvent> {
       for (const index of [...calls.keys()].sort((a, b) => a - b)) {
+        if (index >= below || sent.has(index)) continue;
+        sent.add(index);
         const pending = calls.get(index)!;
         const call: ToolCall = { id: pending.id === '' ? `call_${index}` : pending.id, name: pending.name, arguments: parseArguments(pending.args) };
         yield { type: 'tool_call', call };
@@ -122,11 +123,11 @@ export function openaiGateway(endpoint: Endpoint, options: OpenAIGatewayOptions 
         try {
           chunk = JSON.parse(data);
         } catch (error) {
-          throw new SmaltaiError('STREAM_INVALID', `${endpoint.name} sent an event that isn't JSON.`, { cause: error });
+          throw new SmaltaiError('SMALTAI_STREAM_INVALID', `${endpoint.name} sent an event that isn't JSON.`, { cause: error });
         }
         if (chunk?.error !== undefined) {
           const message = typeof chunk.error?.message === 'string' ? chunk.error.message : JSON.stringify(chunk.error);
-          throw new SmaltaiError('GATEWAY_ERROR', `${endpoint.name}: ${message}`);
+          throw new SmaltaiError('SMALTAI_GATEWAY_ERROR', `${endpoint.name}: ${message}`);
         }
         const choice = Array.isArray(chunk?.choices) ? chunk.choices[0] : undefined;
         const delta = choice?.delta;
@@ -134,6 +135,13 @@ export function openaiGateway(endpoint: Endpoint, options: OpenAIGatewayOptions 
         if (Array.isArray(delta?.tool_calls)) {
           for (const part of delta.tool_calls) {
             const index = typeof part?.index === 'number' ? part.index : calls.size;
+            // A call is taken as complete when a later one starts, so it can run while the answer streams (ADR 0025
+            // section 7). Assumption, not yet checked against each gateway: calls stream one after another. A stream
+            // that goes back to a call already handed on is refused rather than run with part of its arguments.
+            if (sent.has(index)) {
+              throw new SmaltaiError('SMALTAI_STREAM_INVALID', `${endpoint.name} went back to a tool call that had already started.`);
+            }
+            if (!calls.has(index)) yield* flush(index);
             const pending = calls.get(index) ?? { id: '', name: '', args: '' };
             if (typeof part?.id === 'string') pending.id = part.id;
             if (typeof part?.function?.name === 'string') pending.name += part.function.name;
@@ -152,10 +160,10 @@ export function openaiGateway(endpoint: Endpoint, options: OpenAIGatewayOptions 
       }
     } catch (error) {
       if (error instanceof SmaltaiError) throw error;
-      if (isAbort(error, signal)) throw new SmaltaiError('ABORTED', 'Stopped.', { cause: error });
-      throw new SmaltaiError('STREAM_INVALID', `The stream from ${endpoint.name} broke off.`, { cause: error });
+      if (isAbort(error, signal)) throw new SmaltaiError('SMALTAI_ABORTED', 'Stopped.', { cause: error });
+      throw new SmaltaiError('SMALTAI_STREAM_INVALID', `The stream from ${endpoint.name} broke off.`, { cause: error });
     }
-    if (signal?.aborted === true) throw new SmaltaiError('ABORTED', 'Stopped.');
+    if (signal?.aborted === true) throw new SmaltaiError('SMALTAI_ABORTED', 'Stopped.');
     yield* flush();
     yield { type: 'done', reason };
   }
@@ -163,7 +171,7 @@ export function openaiGateway(endpoint: Endpoint, options: OpenAIGatewayOptions 
   async function models(signal?: AbortSignal): Promise<ModelInfo[]> {
     const response = await request('/v1/models', { method: 'GET', headers: { accept: 'application/json' } }, signal);
     const json: any = await response.json().catch((error: unknown) => {
-      throw new SmaltaiError('STREAM_INVALID', `${endpoint.name} sent a model list that isn't JSON.`, { cause: error });
+      throw new SmaltaiError('SMALTAI_STREAM_INVALID', `${endpoint.name} sent a model list that isn't JSON.`, { cause: error });
     });
     const list = Array.isArray(json?.data) ? json.data : [];
     return list.filter((m: any) => typeof m?.id === 'string').map((m: any) => ({ id: m.id }));

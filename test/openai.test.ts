@@ -36,14 +36,15 @@ test('streams text, then usage, then done', async () => {
   assert.deepEqual(body.stream_options, { include_usage: true });
 });
 
-test('assembles tool calls from their deltas', async () => {
+test('assembles tool calls from their deltas, each handed on when the next starts', async () => {
   const { fetch } = recordingFetch(() =>
     sseResponse(
       sse([
         { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'run_query', arguments: '' } }] } }] },
         { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"sql":' } }] } }] },
-        { choices: [{ delta: { tool_calls: [{ index: 1, id: 'c2', function: { name: 'list_tables', arguments: '{}' } }] } }] },
         { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"select 1"}' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 1, id: 'c2', function: { name: 'list_tables', arguments: '{}' } }] } }] },
+        { choices: [{ delta: { content: 'thinking' } }] },
         { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
       ]),
     ),
@@ -51,9 +52,23 @@ test('assembles tool calls from their deltas', async () => {
   const events = await collect(openaiGateway(ep, { fetch }).chat({ model: 'm', messages: [] }));
   assert.deepEqual(events, [
     { type: 'tool_call', call: { id: 'c1', name: 'run_query', arguments: { sql: 'select 1' } } },
+    { type: 'text', text: 'thinking' },
     { type: 'tool_call', call: { id: 'c2', name: 'list_tables', arguments: {} } },
     { type: 'done', reason: 'tool_calls' },
   ]);
+});
+
+test('a stream that goes back to a call already handed on is refused', async () => {
+  const { fetch } = recordingFetch(() =>
+    sseResponse(
+      sse([
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'f', arguments: '{' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 1, id: 'c2', function: { name: 'g', arguments: '{}' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '}' } }] } }] },
+      ]),
+    ),
+  );
+  await assert.rejects(collect(openaiGateway(ep, { fetch }).chat({ model: 'm', messages: [] })), code('SMALTAI_STREAM_INVALID'));
 });
 
 test('arguments that are not JSON are kept as text', async () => {
@@ -85,25 +100,25 @@ test('the request body: messages, tool calls and tools in the wire format', () =
 test('an error status becomes GATEWAY_ERROR with the status', async () => {
   const { fetch } = recordingFetch(() => new Response('model not found', { status: 404 }));
   await assert.rejects(collect(openaiGateway(ep, { fetch }).chat({ model: 'x', messages: [] })), (e: unknown) => {
-    return e instanceof SmaltaiError && e.code === 'GATEWAY_ERROR' && e.status === 404 && /model not found/.test(e.message);
+    return e instanceof SmaltaiError && e.code === 'SMALTAI_GATEWAY_ERROR' && e.status === 404 && /model not found/.test(e.message);
   });
 });
 
 test('an error inside the stream becomes GATEWAY_ERROR', async () => {
   const { fetch } = recordingFetch(() => sseResponse(['data: {"error":{"message":"overloaded"}}\n\n']));
-  await assert.rejects(collect(openaiGateway(ep, { fetch }).chat({ model: 'x', messages: [] })), code('GATEWAY_ERROR'));
+  await assert.rejects(collect(openaiGateway(ep, { fetch }).chat({ model: 'x', messages: [] })), code('SMALTAI_GATEWAY_ERROR'));
 });
 
 test('a refused connection becomes GATEWAY_UNREACHABLE', async () => {
   const fetch = async () => {
     throw new TypeError('Failed to fetch');
   };
-  await assert.rejects(collect(openaiGateway(ep, { fetch }).chat({ model: 'x', messages: [] })), code('GATEWAY_UNREACHABLE'));
+  await assert.rejects(collect(openaiGateway(ep, { fetch }).chat({ model: 'x', messages: [] })), code('SMALTAI_GATEWAY_UNREACHABLE'));
 });
 
 test('an event that is not JSON becomes STREAM_INVALID', async () => {
   const { fetch } = recordingFetch(() => sseResponse(['data: {nope\n\n']));
-  await assert.rejects(collect(openaiGateway(ep, { fetch }).chat({ model: 'x', messages: [] })), code('STREAM_INVALID'));
+  await assert.rejects(collect(openaiGateway(ep, { fetch }).chat({ model: 'x', messages: [] })), code('SMALTAI_STREAM_INVALID'));
 });
 
 test('the signal stops a stream mid-way', async () => {
@@ -124,7 +139,7 @@ test('the signal stops a stream mid-way', async () => {
         if (seen.length === 3) controller.abort();
       }
     })(),
-    code('ABORTED'),
+    code('SMALTAI_ABORTED'),
   );
   assert.equal(seen.length, 3);
   assert.ok(pulls < 10);

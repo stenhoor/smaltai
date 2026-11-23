@@ -15,7 +15,10 @@ export interface LogEntry {
   data: unknown;
 }
 
-/** Where entries go. A store kept in IndexedDB comes with the chat panel; {@link memoryLog} keeps them in memory. */
+/**
+ * Where entries go. {@link memoryLog} keeps them in memory; the log in a page is kept in smaltdb, in a database of
+ * smaltai's own (DECISIONS.md, 2026-11-23), and is still to be built.
+ */
 export interface Log {
   append(kind: LogKind, data: unknown): LogEntry;
   entries(): readonly LogEntry[];

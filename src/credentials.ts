@@ -40,20 +40,20 @@ function headerNames(headers: HeadersInit | undefined): string[] {
   return Object.keys(headers);
 }
 
-/** Throws `CREDENTIAL_REFUSED` if a URL carries a user name, a password or a credential parameter. */
+/** Throws `SMALTAI_CREDENTIAL_REFUSED` if a URL carries a user name, a password or a credential parameter. */
 export function refuseCredentialUrl(url: URL): void {
   if (url.username !== '' || url.password !== '') {
-    throw new SmaltaiError('CREDENTIAL_REFUSED', 'An address may not carry a user name or password: put the key in your gateway.');
+    throw new SmaltaiError('SMALTAI_CREDENTIAL_REFUSED', 'An address may not carry a user name or password: put the key in your gateway.');
   }
   for (const name of url.searchParams.keys()) {
     if (isCredentialParam(name)) {
-      throw new SmaltaiError('CREDENTIAL_REFUSED', `An address may not carry a credential parameter (${name}): put the key in your gateway.`);
+      throw new SmaltaiError('SMALTAI_CREDENTIAL_REFUSED', `An address may not carry a credential parameter (${name}): put the key in your gateway.`);
     }
   }
 }
 
 /**
- * Wraps a `fetch` so that no request carries a credential. Throws `CREDENTIAL_REFUSED` before anything is sent if a
+ * Wraps a `fetch` so that no request carries a credential. Throws `SMALTAI_CREDENTIAL_REFUSED` before anything is sent if a
  * header or the address would carry one, and always sends `credentials: 'omit'`.
  */
 export function guardedFetch(fetchImpl: Fetch): Fetch {
@@ -61,7 +61,7 @@ export function guardedFetch(fetchImpl: Fetch): Fetch {
     refuseCredentialUrl(new URL(input));
     for (const name of headerNames(init.headers)) {
       if (isCredentialHeader(name)) {
-        throw new SmaltaiError('CREDENTIAL_REFUSED', `smaltai never sends a credential header (${name}): put the key in your gateway.`);
+        throw new SmaltaiError('SMALTAI_CREDENTIAL_REFUSED', `smaltai never sends a credential header (${name}): put the key in your gateway.`);
       }
     }
     return fetchImpl(input, { ...init, credentials: 'omit' });

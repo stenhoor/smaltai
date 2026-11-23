@@ -80,7 +80,7 @@ export function createRouter(options: RouterOptions = {}): Router {
     },
     gateway(id) {
       const found = load().find((e) => e.id === id);
-      if (found === undefined) throw new SmaltaiError('ENDPOINT_INVALID', `No endpoint "${id}".`);
+      if (found === undefined) throw new SmaltaiError('SMALTAI_ENDPOINT_INVALID', `No endpoint "${id}".`);
       const fetchOption = options.fetch === undefined ? {} : { fetch: options.fetch };
       switch (found.format) {
         case 'openai':
