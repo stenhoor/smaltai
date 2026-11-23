@@ -76,21 +76,33 @@ test('invalid grants are refused', () => {
   assert.throws(() => grants({ actions: { a: 'yes' } }), invalid);
 });
 
-test('grants are remembered per endpoint and database, revocable, and every change is logged', () => {
+test('grants are remembered per endpoint and database, revocable, and every change is logged', async () => {
   const store = memoryStore();
   const log = memoryLog();
   const s = createGrantStore({ store, log });
-  assert.throws(() => s.set('ollama', 'sales.db', { data: { level: 'sample' } }), (e: unknown) => e instanceof SmaltaiError && e.code === 'SMALTAI_GRANT_INVALID');
-  s.set('ollama', 'sales.db', { data: { level: 'sample', sampleRows: 50 } }, { rowsWarningShown: true });
+  await assert.rejects(s.set('ollama', 'sales.db', { data: { level: 'sample' } }), (e: unknown) => e instanceof SmaltaiError && e.code === 'SMALTAI_GRANT_INVALID');
+  await s.set('ollama', 'sales.db', { data: { level: 'sample', sampleRows: 50 } }, { rowsWarningShown: true });
   // Already at sample: changing the size or the actions needs no second warning.
-  s.set('ollama', 'sales.db', { data: { level: 'sample', sampleRows: 20 } });
-  assert.equal(createGrantStore({ store }).get('ollama', 'sales.db').data.level, 'sample');
-  assert.equal(s.get('ollama', 'other.db').data.level, 'schema');
-  assert.equal(s.get('litellm', 'sales.db').data.level, 'schema');
-  assert.equal(s.list().length, 1);
-  s.revoke('ollama', 'sales.db');
-  assert.equal(s.get('ollama', 'sales.db').data.level, 'schema');
-  assert.deepEqual(log.entries().map((e) => [e.kind, (e.data as { change: string }).change]), [['grant', 'set'], ['grant', 'set'], ['grant', 'revoked']]);
+  await s.set('ollama', 'sales.db', { data: { level: 'sample', sampleRows: 20 } });
+  assert.equal((await createGrantStore({ store }).get('ollama', 'sales.db')).data.level, 'sample');
+  assert.equal((await s.get('ollama', 'other.db')).data.level, 'schema');
+  assert.equal((await s.get('litellm', 'sales.db')).data.level, 'schema');
+  assert.equal((await s.list()).length, 1);
+  await s.revoke('ollama', 'sales.db');
+  assert.equal((await s.get('ollama', 'sales.db')).data.level, 'schema');
+  assert.deepEqual((await log.entries()).map((e) => [e.kind, (e.data as { change: string }).change]), [['grant', 'set'], ['grant', 'set'], ['grant', 'revoked']]);
+});
+
+test('invalid grants are refused by the store as a rejection, and nothing is kept', async () => {
+  const s = createGrantStore();
+  await assert.rejects(s.set('ollama', 'a.db', { data: { level: 'everything' } }), (e: unknown) => e instanceof SmaltaiError && e.code === 'SMALTAI_GRANT_INVALID');
+  assert.deepEqual(await s.list(), []);
+});
+
+test('grant changes made at the same time are all kept', async () => {
+  const s = createGrantStore();
+  await Promise.all(['a.db', 'b.db', 'c.db'].map((db) => s.set('ollama', db, { actions: { change_report: true } })));
+  assert.deepEqual((await s.list()).map((g) => g.database).sort(), ['a.db', 'b.db', 'c.db']);
 });
 
 test('the rows warning says a local gateway may pass rows on', () => {

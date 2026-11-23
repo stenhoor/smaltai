@@ -6,8 +6,8 @@
  * time in the order called. Grants decide what runs without asking ({@link decide}); the rest waits for the user, who
  * may allow it once or grant it (ADR 0025 section 5). Results go back to the model marked as data ({@link asData});
  * smaltai's own notes (declined, cancelled, unknown action) go as plain text. Everything is logged, with smaltai's own
- * time per step (ADR 0025 section 7). The signal is the kill switch: it stops the stream and cancels the actions not
- * yet run (ADR 0043 section 6).
+ * time per step (ADR 0025 section 7), and each request is recorded before it is sent (ADR 0043 section 5). The signal
+ * is the kill switch: it stops the stream and cancels the actions not yet run (ADR 0043 section 6).
  *
  * The agent has no way to change grants: it only reads them. A grant given from a question goes to the app's
  * `onGrant`, which the app handles as the user's own change (DECISIONS.md, 2026-11-23).
@@ -88,11 +88,14 @@ export interface AgentOptions {
   model: string;
   actions: Action[];
   /** The grants in force, read before every call, so a change or a revoke takes effect at once. */
-  grants: () => Grants;
+  grants: () => Promise<Grants>;
   /** Asks the user. */
   approve: (request: ApprovalRequest) => Promise<Approval>;
-  /** Called when the user answers "grant": the app records it in its grants, as the user's own change. */
-  onGrant?: (action: string) => void;
+  /**
+   * Called when the user answers "grant": the app records it in its grants, as the user's own change. The agent waits
+   * for it, so the next call reads the grant.
+   */
+  onGrant?: (action: string) => Promise<void>;
   log: Log;
   /** The app's own instructions, before the data rule. */
   system?: string;
@@ -135,8 +138,8 @@ export async function runAgent(options: AgentOptions, history: Message[], signal
   const timings: Timings = { buildMs: [], actionMs: [] };
   const emit = (event: AgentEvent) => options.onEvent?.(event);
   const result = (outcome: AgentResult['outcome']): AgentResult => ({ messages, usage: total, timings, outcome });
-  const stopped = (): AgentResult => {
-    log.append('stop', { reason: 'stopped by the user' });
+  const stopped = async (): Promise<AgentResult> => {
+    await log.append('stop', { reason: 'stopped by the user' });
     return result('stopped');
   };
 
@@ -145,11 +148,12 @@ export async function runAgent(options: AgentOptions, history: Message[], signal
       if (controller.signal.aborted) return stopped();
       const built = performance.now();
       const request = { model, messages: [...messages], tools, signal: controller.signal };
-      // Exactly what leaves the browser, where the gateway can say (ADR 0043, section 5).
+      // Exactly what leaves the browser, where the gateway can say, recorded before it leaves (ADR 0043, section 5): if
+      // the log can't record it, the request isn't sent.
       const sent = gateway.describe?.(request) ?? { model, messages, tools };
       const buildMs = performance.now() - built;
       timings.buildMs.push(buildMs);
-      log.append('request', { ...sent, buildMs });
+      await log.append('request', { ...sent, buildMs });
 
       let text = '';
       const calls: ToolCall[] = [];
@@ -178,7 +182,7 @@ export async function runAgent(options: AgentOptions, history: Message[], signal
         // Let the actions already started finish or cancel, so the log is complete.
         const settled = await Promise.allSettled(answers);
         if (aborted) {
-          log.append('response', { text, toolCalls: calls, partial: true });
+          await log.append('response', { text, toolCalls: calls, partial: true });
           // Keep what the model said and an answer for each call it made, so the conversation can go on later.
           messages.push(calls.length > 0 ? { role: 'assistant', content: text, toolCalls: calls } : { role: 'assistant', content: text });
           calls.forEach((call, i) => {
@@ -187,10 +191,10 @@ export async function runAgent(options: AgentOptions, history: Message[], signal
           });
           return stopped();
         }
-        log.append('error', { during: 'request', error });
+        await log.append('error', { during: 'request', error });
         throw error;
       }
-      log.append('response', { text, toolCalls: calls, usage: usage ?? null, reason });
+      await log.append('response', { text, toolCalls: calls, usage: usage ?? null, reason });
       if (usage !== undefined) {
         total.inputTokens += usage.inputTokens;
         total.outputTokens += usage.outputTokens;
@@ -203,7 +207,7 @@ export async function runAgent(options: AgentOptions, history: Message[], signal
       calls.forEach((call, i) => messages.push({ role: 'tool', toolCallId: call.id, content: contents[i]! }));
       if (controller.signal.aborted) return stopped();
     }
-    log.append('stop', { reason: 'step limit', maxSteps });
+    await log.append('stop', { reason: 'step limit', maxSteps });
     return result('limit');
   } finally {
     signal?.removeEventListener('abort', stop);
@@ -211,47 +215,47 @@ export async function runAgent(options: AgentOptions, history: Message[], signal
 
   async function runCall(call: ToolCall): Promise<string> {
     if (controller.signal.aborted) {
-      log.append('result', { call, cancelled: true });
+      await log.append('result', { call, cancelled: true });
       return CANCELLED;
     }
     const action = byName.get(call.name);
     if (action === undefined) {
-      log.append('action', { call, refused: 'unknown action' });
+      await log.append('action', { call, refused: 'unknown action' });
       return `Error: there is no action ${JSON.stringify(call.name)}.`;
     }
     if (typeof call.arguments !== 'object' || call.arguments === null || Array.isArray(call.arguments)) {
-      log.append('action', { call, refused: 'arguments are not an object' });
+      await log.append('action', { call, refused: 'arguments are not an object' });
       return 'Error: the arguments must be a JSON object.';
     }
     const input = call.arguments as Record<string, unknown>;
-    const decision = decide(options.grants(), action, input);
+    const decision = decide(await options.grants(), action, input);
     let verdict: 'allow' | Approval = 'allow';
     if (decision.verdict === 'ask') {
       const answer = await options.approve({ action: action.name, input, reason: decision.reason, grantable: decision.grantable, undoable: action.undoable });
       // A "grant" the question didn't offer counts as once.
       verdict = answer === 'grant' && !decision.grantable ? 'once' : answer;
-      log.append('approval', { call, reason: decision.reason, answer: verdict });
-      if (verdict === 'grant') options.onGrant?.(action.name);
+      await log.append('approval', { call, reason: decision.reason, answer: verdict });
+      if (verdict === 'grant') await options.onGrant?.(action.name);
     }
     emit({ type: 'action', call, verdict });
     if (verdict === 'decline') return 'The user declined this action.';
     if (controller.signal.aborted) {
-      log.append('result', { call, cancelled: true });
+      await log.append('result', { call, cancelled: true });
       return CANCELLED;
     }
-    log.append('action', { call, verdict });
+    await log.append('action', { call, verdict });
     const started = performance.now();
     try {
       const value = await action.run(input, { signal: controller.signal });
       const ms = performance.now() - started;
       timings.actionMs.push(ms);
-      log.append('result', { call, ok: true, result: value, ms });
+      await log.append('result', { call, ok: true, result: value, ms });
       emit({ type: 'result', call, ok: true, ms });
       return asData(action.name, value);
     } catch (error) {
       const ms = performance.now() - started;
       timings.actionMs.push(ms);
-      log.append('result', { call, ok: false, error, ms });
+      await log.append('result', { call, ok: false, error, ms });
       emit({ type: 'result', call, ok: false, ms });
       return asData(action.name, { error: error instanceof Error ? error.message : String(error) });
     }

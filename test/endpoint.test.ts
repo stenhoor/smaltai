@@ -27,28 +27,40 @@ test('bad endpoints are refused', () => {
   assert.throws(() => endpoint({ id: '', name: 'O', url: 'http://localhost', format: 'openai' }), code('SMALTAI_ENDPOINT_INVALID'));
 });
 
-test('the router remembers endpoints and choices', () => {
+test('the router remembers endpoints and choices', async () => {
   const store = memoryStore();
   const log = memoryLog();
   const router = createRouter({ store, log });
-  router.save({ id: 'o', name: 'Ollama', url: 'http://localhost:11434', format: 'openai' });
-  router.save({ id: 'l', name: 'llama-server', url: 'http://127.0.0.1:8080', format: 'openai' });
-  router.choose('smaltbi', { endpointId: 'l', model: 'qwen' });
+  await router.save({ id: 'o', name: 'Ollama', url: 'http://localhost:11434', format: 'openai' });
+  await router.save({ id: 'l', name: 'llama-server', url: 'http://127.0.0.1:8080', format: 'openai' });
+  await router.choose('smaltbi', { endpointId: 'l', model: 'qwen' });
   const again = createRouter({ store });
-  assert.deepEqual(again.endpoints().map((e) => e.id), ['o', 'l']);
-  assert.deepEqual(again.choice('smaltbi'), { endpointId: 'l', model: 'qwen' });
-  assert.equal(again.choice('smaltnb'), null);
-  again.remove('o');
-  assert.deepEqual(again.endpoints().map((e) => e.id), ['l']);
-  assert.throws(() => again.gateway('o'), code('SMALTAI_ENDPOINT_INVALID'));
-  assert.equal(typeof again.gateway('l').chat, 'function');
-  assert.equal(log.entries().length, 2);
+  assert.deepEqual((await again.endpoints()).map((e) => e.id), ['o', 'l']);
+  assert.deepEqual(await again.choice('smaltbi'), { endpointId: 'l', model: 'qwen' });
+  assert.equal(await again.choice('smaltnb'), null);
+  await again.remove('o');
+  assert.deepEqual((await again.endpoints()).map((e) => e.id), ['l']);
+  await assert.rejects(again.gateway('o'), code('SMALTAI_ENDPOINT_INVALID'));
+  assert.equal(typeof (await again.gateway('l')).chat, 'function');
+  assert.equal((await log.entries()).length, 2);
 });
 
-test('a stored endpoint with a key is refused when read back', () => {
+test('saves made at the same time are all kept', async () => {
+  const router = createRouter();
+  await Promise.all(['a', 'b', 'c', 'd'].map((id) => router.save({ id, name: id, url: 'http://localhost', format: 'openai' })));
+  assert.deepEqual((await router.endpoints()).map((e) => e.id).sort(), ['a', 'b', 'c', 'd']);
+});
+
+test('an invalid endpoint is refused before anything is stored', async () => {
+  const router = createRouter();
+  await assert.rejects(router.save({ id: 'x', name: 'X', url: 'http://localhost', format: 'openai', apiKey: 'sk' }), code('SMALTAI_ENDPOINT_INVALID'));
+  assert.deepEqual(await router.endpoints(), []);
+});
+
+test('a stored endpoint with a key is refused when read back', async () => {
   const store = memoryStore();
-  store.setItem('smaltai.endpoints', JSON.stringify([{ id: 'x', name: 'X', url: 'http://localhost', format: 'openai', apiKey: 'sk' }]));
+  await store.setItem('smaltai.endpoints', JSON.stringify([{ id: 'x', name: 'X', url: 'http://localhost', format: 'openai', apiKey: 'sk' }]));
   const log = memoryLog();
-  assert.deepEqual(createRouter({ store, log }).endpoints(), []);
-  assert.equal(log.entries()[0]!.kind, 'error');
+  assert.deepEqual(await createRouter({ store, log }).endpoints(), []);
+  assert.equal((await log.entries())[0]!.kind, 'error');
 });

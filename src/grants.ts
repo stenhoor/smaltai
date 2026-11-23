@@ -10,7 +10,7 @@
  */
 import { SmaltaiError } from './errors.js';
 import type { Log } from './log.js';
-import { memoryStore, readJson, type KeyValueStore } from './store.js';
+import { memoryStore, readJson, serial, type KeyValueStore } from './store.js';
 
 /** The data levels, from least to most. */
 export const DATA_LEVELS = ['schema', 'statistics', 'sample', 'full'] as const;
@@ -176,26 +176,30 @@ export function shapeRows(grant: DataGrant, input: Rows): Rows & { withheldRows:
   };
 }
 
-/** Where grants are kept, per endpoint and database, with every change logged. */
+/**
+ * Where grants are kept, per endpoint and database, with every change logged. Asynchronous, as its store is
+ * (DECISIONS.md, 2026-11-23: "smaltai's storage").
+ */
 export interface GrantStore {
-  get(endpointId: string, database: string): Grants;
+  get(endpointId: string, database: string): Promise<Grants>;
   /**
    * Sets the grants. Raising the data level to sample rows or full data needs `rowsWarningShown: true`: the app showed
    * {@link ROWS_WARNING} and the user confirmed the grant with it. Otherwise throws `SMALTAI_GRANT_INVALID`.
    */
-  set(endpointId: string, database: string, grants: unknown, options?: { rowsWarningShown?: boolean }): Grants;
+  set(endpointId: string, database: string, grants: unknown, options?: { rowsWarningShown?: boolean }): Promise<Grants>;
   /** Back to {@link defaultGrants}. */
-  revoke(endpointId: string, database: string): void;
+  revoke(endpointId: string, database: string): Promise<void>;
   /** Every remembered grant, for the grants panel. */
-  list(): { endpointId: string; database: string; grants: Grants }[];
+  list(): Promise<{ endpointId: string; database: string; grants: Grants }[]>;
 }
 
 export function createGrantStore(options: { store?: KeyValueStore; log?: Log; prefix?: string } = {}): GrantStore {
   const store = options.store ?? memoryStore();
   const key = `${options.prefix ?? 'smaltai'}.grants`;
   type Saved = Record<string, { endpointId: string; database: string; grants: unknown }>;
-  const load = (): Saved => {
-    const raw = readJson(store, key);
+  const oneAtATime = serial();
+  const load = async (): Promise<Saved> => {
+    const raw = await readJson(store, key);
     return typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Saved) : {};
   };
   const id = (endpointId: string, database: string) => JSON.stringify([endpointId, database]);
@@ -208,30 +212,36 @@ export function createGrantStore(options: { store?: KeyValueStore; log?: Log; pr
   };
   return {
     get(endpointId, database) {
-      const saved = load()[id(endpointId, database)];
-      return saved === undefined ? defaultGrants() : read(saved.grants);
+      return oneAtATime(async () => {
+        const saved = (await load())[id(endpointId, database)];
+        return saved === undefined ? defaultGrants() : read(saved.grants);
+      });
     },
-    set(endpointId, database, input, setOptions = {}) {
+    async set(endpointId, database, input, setOptions = {}) {
       const checked = grants(input);
-      const all = load();
-      const before = all[id(endpointId, database)];
-      const was = before === undefined ? defaultGrants().data.level : read(before.grants).data.level;
-      if (covers(checked.data.level, 'sample') && !covers(was, 'sample') && setOptions.rowsWarningShown !== true) {
-        throw new SmaltaiError('SMALTAI_GRANT_INVALID', `Granting ${checked.data.level} sends rows: show ROWS_WARNING and confirm it first.`);
-      }
-      all[id(endpointId, database)] = { endpointId, database, grants: checked };
-      store.setItem(key, JSON.stringify(all));
-      options.log?.append('grant', { change: 'set', endpointId, database, grants: checked, rowsWarningShown: setOptions.rowsWarningShown === true });
-      return checked;
+      return oneAtATime(async () => {
+        const all = await load();
+        const before = all[id(endpointId, database)];
+        const was = before === undefined ? defaultGrants().data.level : read(before.grants).data.level;
+        if (covers(checked.data.level, 'sample') && !covers(was, 'sample') && setOptions.rowsWarningShown !== true) {
+          throw new SmaltaiError('SMALTAI_GRANT_INVALID', `Granting ${checked.data.level} sends rows: show ROWS_WARNING and confirm it first.`);
+        }
+        all[id(endpointId, database)] = { endpointId, database, grants: checked };
+        await store.setItem(key, JSON.stringify(all));
+        await options.log?.append('grant', { change: 'set', endpointId, database, grants: checked, rowsWarningShown: setOptions.rowsWarningShown === true });
+        return checked;
+      });
     },
     revoke(endpointId, database) {
-      const all = load();
-      delete all[id(endpointId, database)];
-      store.setItem(key, JSON.stringify(all));
-      options.log?.append('grant', { change: 'revoked', endpointId, database });
+      return oneAtATime(async () => {
+        const all = await load();
+        delete all[id(endpointId, database)];
+        await store.setItem(key, JSON.stringify(all));
+        await options.log?.append('grant', { change: 'revoked', endpointId, database });
+      });
     },
     list() {
-      return Object.values(load()).map((s) => ({ endpointId: s.endpointId, database: s.database, grants: read(s.grants) }));
+      return oneAtATime(async () => Object.values(await load()).map((s) => ({ endpointId: s.endpointId, database: s.database, grants: read(s.grants) })));
     },
   };
 }
