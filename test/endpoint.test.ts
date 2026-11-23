@@ -15,16 +15,16 @@ test('an endpoint is an address and a format', () => {
 });
 
 test('an endpoint has no place for a key', () => {
-  assert.throws(() => endpoint({ id: 'o', name: 'O', url: 'http://localhost', format: 'openai', apiKey: 'sk-x' }), code('ENDPOINT_INVALID'));
-  assert.throws(() => endpoint({ id: 'o', name: 'O', url: 'http://u:p@localhost', format: 'openai' }), code('CREDENTIAL_REFUSED'));
-  assert.throws(() => endpoint({ id: 'o', name: 'O', url: 'http://localhost?token=x', format: 'openai' }), code('CREDENTIAL_REFUSED'));
+  assert.throws(() => endpoint({ id: 'o', name: 'O', url: 'http://localhost', format: 'openai', apiKey: 'sk-x' }), code('SMALTAI_ENDPOINT_INVALID'));
+  assert.throws(() => endpoint({ id: 'o', name: 'O', url: 'http://u:p@localhost', format: 'openai' }), code('SMALTAI_CREDENTIAL_REFUSED'));
+  assert.throws(() => endpoint({ id: 'o', name: 'O', url: 'http://localhost?token=x', format: 'openai' }), code('SMALTAI_CREDENTIAL_REFUSED'));
 });
 
 test('bad endpoints are refused', () => {
-  assert.throws(() => endpoint({ id: 'o', name: 'O', url: 'ftp://localhost', format: 'openai' }), code('ENDPOINT_INVALID'));
-  assert.throws(() => endpoint({ id: 'o', name: 'O', url: 'not a url', format: 'openai' }), code('ENDPOINT_INVALID'));
-  assert.throws(() => endpoint({ id: 'o', name: 'O', url: 'http://localhost', format: 'anthropic' }), code('ENDPOINT_INVALID'));
-  assert.throws(() => endpoint({ id: '', name: 'O', url: 'http://localhost', format: 'openai' }), code('ENDPOINT_INVALID'));
+  assert.throws(() => endpoint({ id: 'o', name: 'O', url: 'ftp://localhost', format: 'openai' }), code('SMALTAI_ENDPOINT_INVALID'));
+  assert.throws(() => endpoint({ id: 'o', name: 'O', url: 'not a url', format: 'openai' }), code('SMALTAI_ENDPOINT_INVALID'));
+  assert.throws(() => endpoint({ id: 'o', name: 'O', url: 'http://localhost', format: 'anthropic' }), code('SMALTAI_ENDPOINT_INVALID'));
+  assert.throws(() => endpoint({ id: '', name: 'O', url: 'http://localhost', format: 'openai' }), code('SMALTAI_ENDPOINT_INVALID'));
 });
 
 test('the router remembers endpoints and choices', () => {
@@ -40,7 +40,7 @@ test('the router remembers endpoints and choices', () => {
   assert.equal(again.choice('smaltnb'), null);
   again.remove('o');
   assert.deepEqual(again.endpoints().map((e) => e.id), ['l']);
-  assert.throws(() => again.gateway('o'), code('ENDPOINT_INVALID'));
+  assert.throws(() => again.gateway('o'), code('SMALTAI_ENDPOINT_INVALID'));
   assert.equal(typeof again.gateway('l').chat, 'function');
   assert.equal(log.entries().length, 2);
 });

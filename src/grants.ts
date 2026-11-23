@@ -39,43 +39,80 @@ export interface Grants {
   actions: Record<string, boolean>;
 }
 
-/** What an app declares about an action, for grants. */
+/**
+ * What an app declares about an action, for grants. The fields follow ADR 0025 section 4: its kind, what it touches,
+ * and whether it can be undone.
+ */
 export interface ActionPolicy {
   name: string;
-  /** Changes something (the report, a view, data). A write runs without asking only where granted. */
-  write: boolean;
-  /** Whether a write is granted until the user says otherwise. Changing data is `false`. */
+  /** `read` looks at something; `write` changes data, a document or the app (ADR 0025 section 4). */
+  kind: 'read' | 'write';
+  /** What the action touches: which database, whether it reads rows, which document (ADR 0025 section 4). */
+  touches: { database?: string; rows: boolean; document?: string };
+  /** False for an action that can't be undone, so the chat can say so (ADR 0025 section 4). */
+  undoable: boolean;
+  /**
+   * True if the action runs code the model wrote (a notebook cell, a TypeScript tab). It is a write, and runs only
+   * where the user granted it by name or approves it: never by default (DECISIONS.md, 2026-11-23).
+   */
+  runsCode?: boolean;
+  /** Whether a write is granted until the user says otherwise. Changing data has no default grant (ADR 0043 section 4). */
   grantedByDefault?: boolean;
   /** The data level the action reads at. Below it, the agent asks. */
   reads?: DataLevel;
-  /** True if this call touches configuration tables: always asks. */
+  /** True if this call touches configuration tables: it always asks (ADR 0043 section 4). */
   touchesConfig?: (input: unknown) => boolean;
 }
 
-/** `allow`: run it. `ask`: ask the user first, with the reason. */
-export type Decision = { verdict: 'allow' } | { verdict: 'ask'; reason: string };
+/**
+ * `allow`: run it. `ask`: ask the user first, with the reason. `grantable` says whether the user may grant the action
+ * from the question (ADR 0025 section 5, "allow it once or grant it"): not for configuration tables, which always ask,
+ * and not for a data level, which is changed in the grants panel.
+ */
+export type Decision = { verdict: 'allow' } | { verdict: 'ask'; reason: string; grantable: boolean };
+
+/** True if the action changes something: a write, or code the model wrote. */
+export function isWrite(action: ActionPolicy): boolean {
+  return action.kind === 'write' || action.runsCode === true;
+}
 
 /** Decides whether an action call runs within the grants. */
 export function decide(grants: Grants, action: ActionPolicy, input: unknown): Decision {
-  if (action.touchesConfig?.(input) === true) return { verdict: 'ask', reason: 'It touches configuration tables, which always need your approval.' };
-  if (action.reads !== undefined && !covers(grants.data.level, action.reads)) {
-    return { verdict: 'ask', reason: `It reads at the ${action.reads} level; you granted ${grants.data.level}.` };
+  if (action.touchesConfig?.(input) === true) {
+    return { verdict: 'ask', reason: 'It touches configuration tables, which always need your approval.', grantable: false };
   }
-  if (action.write && !(grants.actions[action.name] ?? action.grantedByDefault ?? false)) {
-    return { verdict: 'ask', reason: `"${action.name}" isn't granted.` };
+  if (action.reads !== undefined && !covers(grants.data.level, action.reads)) {
+    return { verdict: 'ask', reason: `It reads at the ${action.reads} level; you granted ${grants.data.level}.`, grantable: false };
+  }
+  if (isWrite(action)) {
+    const byDefault = action.runsCode === true ? false : (action.grantedByDefault ?? false);
+    if (!(grants.actions[action.name] ?? byDefault)) {
+      return { verdict: 'ask', reason: action.runsCode === true ? `"${action.name}" runs code the model wrote.` : `"${action.name}" isn't granted.`, grantable: true };
+    }
   }
   return { verdict: 'allow' };
 }
 
-/** The grants before the user changes anything: schema only, a 100-row sample size, nothing excluded. */
+/**
+ * The warning shown when the user grants sample rows or full data (ADR 0025 section 5; shown once, as part of the
+ * grant: DECISIONS.md, 2026-11-23).
+ */
+export const ROWS_WARNING =
+  'Rows from your data will be sent to this gateway. A local gateway may pass them on to a hosted model, and smaltai ' +
+  "can't tell whether it does.";
+
+/**
+ * The grants before the user changes anything: schema only (ADR 0025 section 5), a 100-row sample size the user can
+ * change (DECISIONS.md, 2026-11-23), nothing excluded.
+ */
 export function defaultGrants(): Grants {
   return { data: { level: 'schema', sampleRows: 100, excludeTables: [], excludeColumns: [] }, actions: {} };
 }
 
-/** Checks grants as set or read back, and returns them normalized. Throws `GRANT_INVALID`. */
+/** Checks grants as set or read back, and returns them normalized. Throws `SMALTAI_GRANT_INVALID`. */
 export function grants(input: unknown): Grants {
   const fail = (why: string): never => {
-    throw new SmaltaiError('GRANT_INVALID', why);
+    throw new SmaltaiError('SMALTAI_GRANT_INVALID', why);
   };
   if (typeof input !== 'object' || input === null) fail('Grants are an object.');
   const record = input as { data?: Partial<DataGrant>; actions?: unknown };
@@ -142,7 +179,11 @@ export function shapeRows(grant: DataGrant, input: Rows): Rows & { withheldRows:
 /** Where grants are kept, per endpoint and database, with every change logged. */
 export interface GrantStore {
   get(endpointId: string, database: string): Grants;
-  set(endpointId: string, database: string, grants: unknown): Grants;
+  /**
+   * Sets the grants. Raising the data level to sample rows or full data needs `rowsWarningShown: true`: the app showed
+   * {@link ROWS_WARNING} and the user confirmed the grant with it. Otherwise throws `SMALTAI_GRANT_INVALID`.
+   */
+  set(endpointId: string, database: string, grants: unknown, options?: { rowsWarningShown?: boolean }): Grants;
   /** Back to {@link defaultGrants}. */
   revoke(endpointId: string, database: string): void;
   /** Every remembered grant, for the grants panel. */
@@ -170,12 +211,17 @@ export function createGrantStore(options: { store?: KeyValueStore; log?: Log; pr
       const saved = load()[id(endpointId, database)];
       return saved === undefined ? defaultGrants() : read(saved.grants);
     },
-    set(endpointId, database, input) {
+    set(endpointId, database, input, setOptions = {}) {
       const checked = grants(input);
       const all = load();
+      const before = all[id(endpointId, database)];
+      const was = before === undefined ? defaultGrants().data.level : read(before.grants).data.level;
+      if (covers(checked.data.level, 'sample') && !covers(was, 'sample') && setOptions.rowsWarningShown !== true) {
+        throw new SmaltaiError('SMALTAI_GRANT_INVALID', `Granting ${checked.data.level} sends rows: show ROWS_WARNING and confirm it first.`);
+      }
       all[id(endpointId, database)] = { endpointId, database, grants: checked };
       store.setItem(key, JSON.stringify(all));
-      options.log?.append('grant', { change: 'set', endpointId, database, grants: checked });
+      options.log?.append('grant', { change: 'set', endpointId, database, grants: checked, rowsWarningShown: setOptions.rowsWarningShown === true });
       return checked;
     },
     revoke(endpointId, database) {

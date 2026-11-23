@@ -21,18 +21,18 @@ test('credential headers are refused before anything is sent', async () => {
     { 'anthropic-dangerous-direct-browser-access': 'true' },
     { 'X-Custom-Token': 't' },
   ] as Record<string, string>[]) {
-    await assert.rejects(guarded('http://localhost:11434/v1/models', { headers }), refused('CREDENTIAL_REFUSED'));
+    await assert.rejects(guarded('http://localhost:11434/v1/models', { headers }), refused('SMALTAI_CREDENTIAL_REFUSED'));
   }
-  await assert.rejects(guarded('http://localhost/x', { headers: new Headers({ authorization: 'x' }) }), refused('CREDENTIAL_REFUSED'));
-  await assert.rejects(guarded('http://localhost/x', { headers: [['Authorization', 'x']] }), refused('CREDENTIAL_REFUSED'));
+  await assert.rejects(guarded('http://localhost/x', { headers: new Headers({ authorization: 'x' }) }), refused('SMALTAI_CREDENTIAL_REFUSED'));
+  await assert.rejects(guarded('http://localhost/x', { headers: [['Authorization', 'x']] }), refused('SMALTAI_CREDENTIAL_REFUSED'));
   assert.equal(sent.length, 0);
 });
 
 test('credentials in an address are refused', async () => {
   const guarded = guardedFetch(ok);
-  await assert.rejects(guarded('http://user:pass@localhost/x', {}), refused('CREDENTIAL_REFUSED'));
-  await assert.rejects(guarded('http://localhost/x?api_key=1', {}), refused('CREDENTIAL_REFUSED'));
-  await assert.rejects(guarded('http://localhost/x?key=1', {}), refused('CREDENTIAL_REFUSED'));
+  await assert.rejects(guarded('http://user:pass@localhost/x', {}), refused('SMALTAI_CREDENTIAL_REFUSED'));
+  await assert.rejects(guarded('http://localhost/x?api_key=1', {}), refused('SMALTAI_CREDENTIAL_REFUSED'));
+  await assert.rejects(guarded('http://localhost/x?key=1', {}), refused('SMALTAI_CREDENTIAL_REFUSED'));
 });
 
 test('every request omits credentials, whatever the caller asked', async () => {

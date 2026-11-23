@@ -1,4 +1,7 @@
-/** Where the router and the grants remember things: `localStorage` in a page, {@link memoryStore} in tests. */
+/**
+ * Where the router and the grants remember things. {@link memoryStore} keeps them in memory; the store in a page is
+ * smaltdb, in a database of smaltai's own (DECISIONS.md, 2026-11-23), and is still to be built.
+ */
 export interface KeyValueStore {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;

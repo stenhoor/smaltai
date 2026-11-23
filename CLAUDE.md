@@ -22,8 +22,10 @@ smaltai's decisions are tier 1 ADRs in smaltworks:
 ## Status
 
 Phase 1 is in development. The core package is in `src/`: the credential guard, endpoints and the router, the
-`openai` format (chat completions, streamed), grants, the log, the defences and the agent loop. Not built yet: the log
-in IndexedDB, smaltbi's actions, the chat panel, and the gateway recipes checked against each tool.
+`openai` format (chat completions, streamed), grants, the log, the defences and the agent loop. Not built yet: the log,
+grants and endpoints kept in smaltdb, smaltbi's actions, the chat panel, and the gateway recipes checked against each
+tool. The owner's decisions of 2026-11-23 (smaltworks DECISIONS.md, "smaltai: storage, what grants limit, and the core
+package's choices") settle the storage, what grants protect, the error codes and the defaults.
 
 1. **Phase 1:** the router (several endpoints the user registers), grants, the log, the defences, smaltbi's actions and
    the chat panel (in smaltkit), with documented existing gateways.
@@ -52,7 +54,8 @@ npm run docs:dev    # the docs site (VitePress); docs:build fails on dead links 
   key-holding proxy such as LiteLLM). Keys, access and spending are the user's, in their tool. The aim is to keep the
   project out of security concerns.
 - **Grants decide what the agent sees and does** (ADR 0043, section 4): four data levels, narrowed per table and column;
-  writes granted per action; configuration tables always need explicit approval.
+  writes granted per action; configuration tables always need explicit approval. Grants limit the model, not other
+  code on the page; code the model writes is a write action, and no action can change grants.
 - **Everything is logged, locally** (section 5), complete and exportable; nothing is sent anywhere.
 - **Defences are on by default** (section 6): no remote content in the chat, data marked as data, tokens shown, a kill
   switch.
