@@ -1,0 +1,10 @@
+{
+ "smaltdb": {
+  "repo": "stenhoor/smaltdb",
+  "ref": "b82ad6fc8147afff659b5cea1d674999604c50d6"
+ },
+ "@smaltworks/smaltts": {
+  "repo": "stenhoor/smaltts",
+  "ref": "8cc39dc50805cfc8f4a43a04e56ad09a50987631"
+ }
+}

@@ -4,7 +4,7 @@ export * from './credentials.js';
 export * from './endpoint.js';
 export * from './sse.js';
 export * from './openai.js';
-export * from './store.js';
+export * from './serial.js';
 export * from './log.js';
 export * from './router.js';
 export * from './grants.js';

@@ -22,12 +22,13 @@ smaltai's decisions are tier 1 ADRs in smaltworks:
 ## Status
 
 Phase 1 is in development. The core package is in `src/`: the credential guard, endpoints and the router, the
-`openai` format (chat completions, streamed), grants, the log, the defences and the agent loop. The log, the grant store
-and the router are asynchronous, ready for a database behind them. Not built yet: the log, grants and endpoints kept in
-smaltai's own database through smaltts (`@smaltworks/smaltai/store`, stenhoor/smaltai#5), smaltbi's actions, the chat
-panel, and the gateway recipes checked against each tool. The owner's decisions of 2026-11-23 are in smaltworks
-DECISIONS.md: "smaltai: storage, what grants limit, and the core package's choices", "smaltai reaches the database
-through smaltts" and "smaltai's storage: the entry point, the interfaces and smaltts's build".
+`openai` format (chat completions, streamed), grants, the log, the defences and the agent loop, all asynchronous. The
+log, grants, endpoints and chosen models are kept in smaltai's own database through smaltts by
+`@smaltworks/smaltai/store` (`attachStore`: the app opens the database and passes it in). Not built yet: smaltbi's
+actions, the chat panel, and the gateway recipes checked against each tool. The owner's decisions of 2026-11-23 are in
+smaltworks DECISIONS.md: "smaltai: storage, what grants limit, and the core package's choices", "smaltai reaches the
+database through smaltts", "smaltai's storage: the entry point, the interfaces and smaltts's build" and "smaltts follows
+the family's TypeScript standard".
 
 1. **Phase 1:** the router (several endpoints the user registers), grants, the log, the defences, smaltbi's actions and
    the chat panel (in smaltkit), with documented existing gateways.
@@ -37,15 +38,22 @@ through smaltts" and "smaltai's storage: the entry point, the interfaces and sma
 ## Commands
 
 ```bash
-npm install         # prepare builds dist/ (TypeScript 6.0.3); the tests and the typecheck read it
-npm run typecheck   # TypeScript 7's tsc over src/ and test/, no emit (CI runs it)
-npm test            # build, then node --test test/*.test.ts against the built package (CI runs it)
-npm run build       # dist/: ES2022 modules and declarations
-npm run docs:dev    # the docs site (VitePress); docs:build fails on dead links (CI runs it)
+npm ci && npm run deps   # dependencies, then smaltdb and smaltts pinned in packed.json; again after every npm ci or npm install
+npm run build            # dist/: ES2022 modules and declarations (TypeScript 6.0.3); the tests and the typecheck read it
+npm run typecheck        # TypeScript 7's tsc over src/ and test/, no emit (CI runs it)
+npm test                 # build, then node --test test/*.test.ts against the built package (CI runs it)
+npm run docs:dev         # the docs site (VitePress); docs:build fails on dead links (CI runs it)
 ```
+
+smaltdb and smaltts are not on npm yet: `packed.json` pins each to a commit, and `scripts/fetch-packed.mjs` (identical in
+every smalt repository) builds and installs them without touching `package.json` or the lockfile. They are optional peer
+dependencies of `@smaltworks/smaltai/store` alone. To try an unmerged smaltts change:
+`node scripts/fetch-packed.mjs --local @smaltworks/smaltts=../smaltts`.
 
 `src/` imports with `./name.js`; tests import the package by name. Every request goes through `guardedFetch`
 (`src/credentials.ts`); `test/credentials.test.ts` fails if any other source file names a credential header.
+`src/store.ts` (`@smaltworks/smaltai/store`) is the only file that imports smaltts or smaltdb; `test/store.test.ts` fails
+if another does.
 
 ## Rules that come first
 

@@ -15,8 +15,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # smaltdb and smaltts are not on npm yet: build the commits pinned in packed.json and install them.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .cache/packed/*.tgz
+            .cache/packed/*-files
+          key: packed-${{ hashFiles('packed.json') }}
+      - run: npm run deps
+      # dist/ first: the tests import the package by name, and the typecheck reads its declarations.
+      - run: npm run build
       - run: npm run typecheck
-      # Builds dist/, then runs the tests against it.
       - run: npm test
   docs:
     runs-on: ubuntu-latest
