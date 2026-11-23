@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { baseUrl, createRouter, endpoint, memoryStore, memoryLog, SmaltaiError } from '@smaltworks/smaltai';
+import { baseUrl, createRouter, endpoint, memoryLog, memoryRouterStore, SmaltaiError, type RouterStore } from '@smaltworks/smaltai';
 
 const code = (c: string) => (e: unknown) => e instanceof SmaltaiError && e.code === c;
 
@@ -28,14 +28,15 @@ test('bad endpoints are refused', () => {
 });
 
 test('the router remembers endpoints and choices', async () => {
-  const store = memoryStore();
+  const store = memoryRouterStore();
   const log = memoryLog();
   const router = createRouter({ store, log });
   await router.save({ id: 'o', name: 'Ollama', url: 'http://localhost:11434', format: 'openai' });
   await router.save({ id: 'l', name: 'llama-server', url: 'http://127.0.0.1:8080', format: 'openai' });
   await router.choose('smaltbi', { endpointId: 'l', model: 'qwen' });
   const again = createRouter({ store });
-  assert.deepEqual((await again.endpoints()).map((e) => e.id), ['o', 'l']);
+  // In the order of their ids, whatever the order they were saved in.
+  assert.deepEqual((await again.endpoints()).map((e) => e.id), ['l', 'o']);
   assert.deepEqual(await again.choice('smaltbi'), { endpointId: 'l', model: 'qwen' });
   assert.equal(await again.choice('smaltnb'), null);
   await again.remove('o');
@@ -58,8 +59,8 @@ test('an invalid endpoint is refused before anything is stored', async () => {
 });
 
 test('a stored endpoint with a key is refused when read back', async () => {
-  const store = memoryStore();
-  await store.setItem('smaltai.endpoints', JSON.stringify([{ id: 'x', name: 'X', url: 'http://localhost', format: 'openai', apiKey: 'sk' }]));
+  // A store whose row was changed outside smaltai to carry a key.
+  const store: RouterStore = { ...memoryRouterStore(), endpoints: async () => [{ id: 'x', name: 'X', url: 'http://localhost', format: 'openai', apiKey: 'sk' }] };
   const log = memoryLog();
   assert.deepEqual(await createRouter({ store, log }).endpoints(), []);
   assert.equal((await log.entries())[0]!.kind, 'error');

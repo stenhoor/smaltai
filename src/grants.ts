@@ -10,7 +10,7 @@
  */
 import { SmaltaiError } from './errors.js';
 import type { Log } from './log.js';
-import { memoryStore, readJson, serial, type KeyValueStore } from './store.js';
+import { serial } from './serial.js';
 
 /** The data levels, from least to most. */
 export const DATA_LEVELS = ['schema', 'statistics', 'sample', 'full'] as const;
@@ -193,17 +193,36 @@ export interface GrantStore {
   list(): Promise<{ endpointId: string; database: string; grants: Grants }[]>;
 }
 
-export function createGrantStore(options: { store?: KeyValueStore; log?: Log; prefix?: string } = {}): GrantStore {
-  const store = options.store ?? memoryStore();
-  const key = `${options.prefix ?? 'smaltai'}.grants`;
-  type Saved = Record<string, { endpointId: string; database: string; grants: unknown }>;
-  const oneAtATime = serial();
-  const load = async (): Promise<Saved> => {
-    const raw = await readJson(store, key);
-    return typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Saved) : {};
-  };
+/**
+ * Where a grant store keeps grants: in memory ({@link memoryGrantRecords}), or in smaltai's own database through smaltts
+ * (`@smaltworks/smaltai/store`). Grants come back as they were stored, and the grant store checks each again.
+ */
+export interface GrantRecords {
+  /** The stored grants, or `null`. */
+  get(endpointId: string, database: string): Promise<unknown>;
+  put(endpointId: string, database: string, grants: Grants): Promise<void>;
+  delete(endpointId: string, database: string): Promise<void>;
+  list(): Promise<{ endpointId: string; database: string; grants: unknown }[]>;
+}
+
+/** Grant records in memory. */
+export function memoryGrantRecords(): GrantRecords {
+  const map = new Map<string, { endpointId: string; database: string; grants: unknown }>();
   const id = (endpointId: string, database: string) => JSON.stringify([endpointId, database]);
+  return {
+    get: async (endpointId, database) => map.get(id(endpointId, database))?.grants ?? null,
+    put: async (endpointId, database, grants) => void map.set(id(endpointId, database), { endpointId, database, grants: structuredClone(grants) }),
+    delete: async (endpointId, database) => void map.delete(id(endpointId, database)),
+    list: async () => [...map.values()].map((v) => ({ ...v })),
+  };
+}
+
+export function createGrantStore(options: { store?: GrantRecords; log?: Log } = {}): GrantStore {
+  const records = options.store ?? memoryGrantRecords();
+  const oneAtATime = serial();
+  // Stored grants are checked again when read; anything that isn't valid grants counts as the defaults.
   const read = (value: unknown): Grants => {
+    if (value === null || value === undefined) return defaultGrants();
     try {
       return grants(value);
     } catch {
@@ -212,36 +231,28 @@ export function createGrantStore(options: { store?: KeyValueStore; log?: Log; pr
   };
   return {
     get(endpointId, database) {
-      return oneAtATime(async () => {
-        const saved = (await load())[id(endpointId, database)];
-        return saved === undefined ? defaultGrants() : read(saved.grants);
-      });
+      return oneAtATime(async () => read(await records.get(endpointId, database)));
     },
     async set(endpointId, database, input, setOptions = {}) {
       const checked = grants(input);
       return oneAtATime(async () => {
-        const all = await load();
-        const before = all[id(endpointId, database)];
-        const was = before === undefined ? defaultGrants().data.level : read(before.grants).data.level;
+        const was = read(await records.get(endpointId, database)).data.level;
         if (covers(checked.data.level, 'sample') && !covers(was, 'sample') && setOptions.rowsWarningShown !== true) {
           throw new SmaltaiError('SMALTAI_GRANT_INVALID', `Granting ${checked.data.level} sends rows: show ROWS_WARNING and confirm it first.`);
         }
-        all[id(endpointId, database)] = { endpointId, database, grants: checked };
-        await store.setItem(key, JSON.stringify(all));
+        await records.put(endpointId, database, checked);
         await options.log?.append('grant', { change: 'set', endpointId, database, grants: checked, rowsWarningShown: setOptions.rowsWarningShown === true });
         return checked;
       });
     },
     revoke(endpointId, database) {
       return oneAtATime(async () => {
-        const all = await load();
-        delete all[id(endpointId, database)];
-        await store.setItem(key, JSON.stringify(all));
+        await records.delete(endpointId, database);
         await options.log?.append('grant', { change: 'revoked', endpointId, database });
       });
     },
     list() {
-      return oneAtATime(async () => Object.values(await load()).map((s) => ({ endpointId: s.endpointId, database: s.database, grants: read(s.grants) })));
+      return oneAtATime(async () => (await records.list()).map((s) => ({ endpointId: s.endpointId, database: s.database, grants: read(s.grants) })));
     },
   };
 }

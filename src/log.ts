@@ -17,7 +17,7 @@ export interface LogEntry {
 
 /**
  * Where entries go. Asynchronous, because the log in a page is kept in a database of smaltai's own, reached through
- * smaltts (DECISIONS.md, 2026-11-23: "smaltai's storage"); that store is `@smaltworks/smaltai/store`, still to be built.
+ * smaltts (DECISIONS.md, 2026-11-23: "smaltai's storage"); that store is `@smaltworks/smaltai/store`.
  * {@link memoryLog} keeps entries in memory, for tests. `append` resolves once the entry is recorded: the agent waits
  * for it before a request leaves, so the log holds everything that left the browser (ADR 0043 section 5).
  */
@@ -37,7 +37,7 @@ export function memoryLog(options: { now?: () => Date } = {}): Log {
   return {
     async append(kind, data) {
       // A copy, so later changes to the caller's objects don't change what was logged.
-      const entry: LogEntry = { seq: list.length + 1, time: now().toISOString(), kind, data: copy(data) };
+      const entry: LogEntry = { seq: list.length + 1, time: now().toISOString(), kind, data: logData(data) };
       list.push(entry);
       for (const listener of listeners) listener(entry);
       return entry;
@@ -50,7 +50,11 @@ export function memoryLog(options: { now?: () => Date } = {}): Log {
   };
 }
 
-function copy(data: unknown): unknown {
+/**
+ * The JSON form an entry's data is logged in, taken when `append` is called: errors become their name, message and
+ * code, and later changes to the caller's objects don't change what was logged. Every log stores this form.
+ */
+export function logData(data: unknown): unknown {
   if (data === undefined) return null;
   return JSON.parse(JSON.stringify(data, (_key, value: unknown) => (value instanceof Error ? { name: value.name, message: value.message, code: (value as { code?: unknown }).code } : value)));
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { covers, ROWS_WARNING, createGrantStore, decide, defaultGrants, grants, memoryLog, memoryStore, shapeRows, SmaltaiError, type ActionPolicy } from '@smaltworks/smaltai';
+import { covers, ROWS_WARNING, createGrantStore, decide, defaultGrants, grants, memoryGrantRecords, memoryLog, shapeRows, SmaltaiError, type ActionPolicy } from '@smaltworks/smaltai';
 
 const changeReport: ActionPolicy = { name: 'change_report', kind: 'write', touches: { rows: false, document: 'report' }, undoable: true, grantedByDefault: true };
 const changeData: ActionPolicy = { name: 'change_data', kind: 'write', touches: { database: 'sales.db', rows: true }, undoable: false };
@@ -77,7 +77,7 @@ test('invalid grants are refused', () => {
 });
 
 test('grants are remembered per endpoint and database, revocable, and every change is logged', async () => {
-  const store = memoryStore();
+  const store = memoryGrantRecords();
   const log = memoryLog();
   const s = createGrantStore({ store, log });
   await assert.rejects(s.set('ollama', 'sales.db', { data: { level: 'sample' } }), (e: unknown) => e instanceof SmaltaiError && e.code === 'SMALTAI_GRANT_INVALID');
@@ -97,6 +97,14 @@ test('invalid grants are refused by the store as a rejection, and nothing is kep
   const s = createGrantStore();
   await assert.rejects(s.set('ollama', 'a.db', { data: { level: 'everything' } }), (e: unknown) => e instanceof SmaltaiError && e.code === 'SMALTAI_GRANT_INVALID');
   assert.deepEqual(await s.list(), []);
+});
+
+test('stored grants that are not valid count as the defaults', async () => {
+  const store = memoryGrantRecords();
+  await store.put('ollama', 'a.db', { data: { level: 'everything' } } as never);
+  const s = createGrantStore({ store });
+  assert.equal((await s.get('ollama', 'a.db')).data.level, 'schema');
+  assert.equal((await s.list())[0]!.grants.data.level, 'schema');
 });
 
 test('grant changes made at the same time are all kept', async () => {
