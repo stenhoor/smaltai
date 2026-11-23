@@ -2,7 +2,10 @@
 // Playwright is resolved globally, as smaltdb's and smaltts's browser tests resolve it: CI installs it in Playwright's
 // image; locally the pre-installed copy is used. BROWSERS=chromium,firefox,webkit picks the browsers (default:
 // chromium).
+import { mkdtempSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { serve } from './serve.mjs';
 
 const { chromium, firefox, webkit } = createRequire(import.meta.url)('playwright');
@@ -16,9 +19,13 @@ try {
   for (const name of browsers) {
     const engine = ENGINES[name];
     if (!engine) throw new Error(`unknown browser ${name}`);
-    const browser = await engine.launch();
+    // WebKit's default contexts are ephemeral (like private browsing), where OPFS may be unavailable: use a persistent
+    // profile there, as smaltdb's browser test does (its test/browser/run.mjs). PERSISTENT_CONTEXT=1 uses one everywhere.
+    const persistent = name === 'webkit' || !!process.env.PERSISTENT_CONTEXT;
+    const browser = persistent ? null : await engine.launch();
+    const context = persistent ? await engine.launchPersistentContext(mkdtempSync(join(tmpdir(), `smaltai-${name}-`))) : await browser.newContext();
     try {
-      const page = await browser.newPage();
+      const page = context.pages()[0] ?? (await context.newPage());
       const errors = [];
       page.on('pageerror', (e) => errors.push(String(e)));
       await page.goto(url);
@@ -33,7 +40,8 @@ try {
       if (results.length === 0) failed++;
       for (const e of errors) console.log(`page error in ${name}: ${e}`);
     } finally {
-      await browser.close();
+      await context.close();
+      await browser?.close();
     }
   }
 } finally {

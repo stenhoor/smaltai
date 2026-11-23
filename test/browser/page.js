@@ -61,7 +61,8 @@ async function run() {
         await db.close();
         out.push(same(got, expected) ? { name, ok: true } : { name, ok: false, detail: `expected ${JSON.stringify(expected)}\ngot      ${JSON.stringify(got)}` });
       } catch (e) {
-        out.push({ name, ok: false, detail: String(e?.stack ?? e) });
+        // WebKit's stack omits the name and message (smaltdb's test/browser/opfs-worker.ts notes it): give both.
+        out.push({ name, ok: false, detail: `${e?.name ?? 'Error'}: ${e?.message ?? e}${e?.code ? ` (${e.code})` : ''}\n${e?.stack ?? ''}` });
       }
     }
   }
