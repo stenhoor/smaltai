@@ -30,6 +30,7 @@
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "node scripts/fetch-packed.mjs --check && node node_modules/typescript7/bin/tsc -p .",
     "test": "node scripts/fetch-packed.mjs --check && npm run build && node --test test/*.test.ts",
+    "test:browser": "npm run build && node test/browser/run.mjs",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"

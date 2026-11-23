@@ -42,6 +42,7 @@ npm ci && npm run deps   # dependencies, then smaltdb and smaltts pinned in pack
 npm run build            # dist/: ES2022 modules and declarations (TypeScript 6.0.3); the tests and the typecheck read it
 npm run typecheck        # TypeScript 7's tsc over src/ and test/, no emit (CI runs it)
 npm test                 # build, then node --test test/*.test.ts against the built package (CI runs it)
+npm run test:browser     # build, then the store through smaltdb's client in Chromium (BROWSERS=chromium,firefox,webkit; CI runs all three)
 npm run docs:dev         # the docs site (VitePress); docs:build fails on dead links (CI runs it)
 ```
 
