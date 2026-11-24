@@ -129,6 +129,26 @@ test('unknown actions and bad arguments are answered, not run', async () => {
   assert.match(result.messages.find((m) => m.toolCallId === 'c2')!.content, /JSON object/);
 });
 
+test('a call whose input does not match its schema is answered with the problem, and never put to the user', async () => {
+  const ran: string[] = [];
+  const asked: ApprovalRequest[] = [];
+  const log = memoryLog();
+  const strict: Action = { ...actions(ran)[1]!, inputSchema: { type: 'object', properties: { sql: { type: 'string' } }, required: ['sql'], additionalProperties: false } };
+  const gateway = scriptedGateway([
+    [call('c1', 'run_query', { sql: 42 }), call('c2', 'run_query', {}), call('c3', 'run_query', { sql: 'SELECT 1', limit: 5 }), { type: 'done', reason: 'tool_calls' }],
+    [{ type: 'done', reason: 'stop' }],
+  ]);
+  const result = await runAgent({ gateway, model: 'm', actions: [strict], grants: async () => defaultGrants(), approve: async (q) => (asked.push(q), 'once'), log }, []);
+  assert.deepEqual(ran, []);
+  assert.deepEqual(asked, [], 'the user is not asked about a call that does not match');
+  const answer = (id: string) => result.messages.find((m) => m.toolCallId === id)!.content;
+  assert.equal(answer('c1'), 'Error: input.sql: expected a string, got a number. "run_query" takes input of the shape its schema gives.');
+  assert.match(answer('c2'), /input: "sql" is required/);
+  assert.match(answer('c3'), /input\.limit: not allowed/);
+  const refused = (await log.entries()).filter((e) => (e.data as { refused?: string }).refused === 'input does not match the schema');
+  assert.equal(refused.length, 3, 'each refusal is logged');
+});
+
 test('an action that fails is told to the model as data', async () => {
   const acts = actions([]);
   acts[0]!.run = async () => {
@@ -248,6 +268,7 @@ test('every action has a description, schemas, a kind, what it touches and wheth
   assert.throws(() => checkActions([{ ...ok[0]!, touches: undefined as never }]), invalid);
   assert.throws(() => checkActions([{ ...ok[0]!, undoable: undefined as never }]), invalid);
   assert.throws(() => checkActions([ok[0]!, ok[0]!]), invalid);
+  assert.throws(() => checkActions([{ ...ok[0]!, inputSchema: { type: 'object', properties: { when: { type: 'string', format: 'date' } } } }]), invalid, 'a keyword smaltai does not check');
 });
 
 test('each request is recorded in the log before it is sent', async () => {
