@@ -3,11 +3,13 @@
  *
  * Each step sends the conversation and the actions (as tools) to the gateway and streams the answer back. Each action
  * the model calls starts as soon as its call is complete, while the answer still streams (ADR 0025 section 7), one at a
- * time in the order called. Grants decide what runs without asking ({@link decide}); the rest waits for the user, who
- * may allow it once or grant it (ADR 0025 section 5). Results go back to the model marked as data ({@link asData});
- * smaltai's own notes (declined, cancelled, unknown action) go as plain text. Everything is logged, with smaltai's own
- * time per step (ADR 0025 section 7), and each request is recorded before it is sent (ADR 0043 section 5). The signal
- * is the kill switch: it stops the stream and cancels the actions not yet run (ADR 0043 section 6).
+ * time in the order called. A call whose input doesn't match its action's schema goes back to the model as an
+ * error ({@link inputProblem}), before anything else. Grants decide what runs without asking ({@link decide}); the rest
+ * waits for the user, who may allow it once or grant it (ADR 0025 section 5). Results go back to the model marked as
+ * data ({@link asData}); smaltai's own notes (declined, cancelled, unknown action) go as plain text. Everything is
+ * logged, with smaltai's own time per step (ADR 0025 section 7), and each request is recorded before it is sent (ADR
+ * 0043 section 5). The signal is the kill switch: it stops the stream and cancels the actions not yet run (ADR 0043
+ * section 6).
  *
  * The agent has no way to change grants: it only reads them. A grant given from a question goes to the app's
  * `onGrant`, which the app handles as the user's own change (DECISIONS.md, 2026-11-23).
@@ -16,6 +18,7 @@ import { asData, DATA_RULE } from './defences.js';
 import { SmaltaiError } from './errors.js';
 import { decide, type ActionPolicy, type Grants } from './grants.js';
 import type { Log } from './log.js';
+import { inputProblem, schemaProblem } from './schema.js';
 import type { Gateway, Message, ToolCall, ToolSpec, Usage } from './types.js';
 
 /** The step limit's starting value; the user sets their own (DECISIONS.md, 2026-11-23). */
@@ -33,9 +36,9 @@ export interface Action extends ActionPolicy, ToolSpec {
 
 /**
  * Checks an app's actions: each has a name used once, a description, an input and a result schema that are JSON
- * Schema objects, a kind, what it touches and whether it can be undone. ADR 0025 section 6: a test fails if an action
- * has no description or input schema; an app's tests call this. `runAgent` calls it too. Throws
- * `SMALTAI_ACTION_INVALID`.
+ * Schema objects, a kind, what it touches and whether it can be undone, and its input schema uses only what smaltai
+ * checks ({@link schemaProblem}). ADR 0025 section 6: a test fails if an action has no description or input schema; an
+ * app's tests call this. `runAgent` calls it too. Throws `SMALTAI_ACTION_INVALID`.
  */
 export function checkActions(actions: readonly Action[]): void {
   const fail = (why: string): never => {
@@ -53,6 +56,8 @@ export function checkActions(actions: readonly Action[]): void {
       if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) fail(`"${name}" has no ${key}.`);
     }
     if (action.inputSchema.type !== 'object') fail(`"${name}": its inputSchema's type is "object".`);
+    const problem = schemaProblem(action.inputSchema);
+    if (problem !== null) fail(`"${name}": ${problem}.`);
     if (action.kind !== 'read' && action.kind !== 'write') fail(`"${name}": its kind is "read" or "write".`);
     if (typeof action.touches !== 'object' || action.touches === null || typeof action.touches.rows !== 'boolean') {
       fail(`"${name}" doesn't say what it touches.`);
@@ -228,6 +233,12 @@ export async function runAgent(options: AgentOptions, history: Message[], signal
       return 'Error: the arguments must be a JSON object.';
     }
     const input = call.arguments as Record<string, unknown>;
+    // Checked against the action's schema before the grants: a call that doesn't match is never put to the user.
+    const problem = inputProblem(action.inputSchema, input);
+    if (problem !== null) {
+      await log.append('action', { call, refused: 'input does not match the schema', problem });
+      return `Error: ${problem}. "${action.name}" takes input of the shape its schema gives.`;
+    }
     const decision = decide(await options.grants(), action, input);
     let verdict: 'allow' | Approval = 'allow';
     if (decision.verdict === 'ask') {

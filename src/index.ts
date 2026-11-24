@@ -9,4 +9,5 @@ export * from './log.js';
 export * from './router.js';
 export * from './grants.js';
 export * from './defences.js';
+export * from './schema.js';
 export * from './agent.js';
